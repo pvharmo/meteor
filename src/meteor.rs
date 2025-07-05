@@ -1,5 +1,5 @@
+use crate::stemmer::Stemmer;
 use crate::synsets::Synsets;
-use std::collections::HashSet;
 
 // Utility Types
 type EnumeratedWord = (usize, String);
@@ -29,7 +29,7 @@ fn match_enums(
     mut enum_hypothesis_list: Vec<EnumeratedWord>,
     mut enum_reference_list: Vec<EnumeratedWord>,
 ) -> (Vec<MatchedTuple>, Vec<EnumeratedWord>, Vec<EnumeratedWord>) {
-    let mut word_match = vec![];
+    let mut word_match = Vec::with_capacity(enum_hypothesis_list.len());
 
     let mut i = enum_hypothesis_list.len() as isize - 1;
     while i >= 0 {
@@ -55,16 +55,17 @@ fn match_enums(
 fn enum_stem_match(
     enum_hypothesis_list: Vec<EnumeratedWord>,
     enum_reference_list: Vec<EnumeratedWord>,
+    stemmer: &Stemmer,
 ) -> (Vec<MatchedTuple>, Vec<UnmatchedTuple>, Vec<UnmatchedTuple>) {
-    let stemmed_enum_hypothesis: Vec<_> = enum_hypothesis_list
+    let stemmed_enum_hypothesis = enum_hypothesis_list
         .into_iter()
-        .map(|(i, word)| (i, stem::get(&word).unwrap()))
-        .collect();
+        .map(|(i, word)| (i, stemmer.get(&word)))
+        .collect::<Vec<_>>();
 
-    let stemmed_enum_reference: Vec<_> = enum_reference_list
+    let stemmed_enum_reference = enum_reference_list
         .into_iter()
-        .map(|(i, word)| (i, stem::get(&word).unwrap()))
-        .collect();
+        .map(|(i, word)| (i, stemmer.get(&word)))
+        .collect::<Vec<_>>();
 
     match_enums(stemmed_enum_hypothesis, stemmed_enum_reference)
 }
@@ -93,14 +94,14 @@ fn enum_stem_match(
 fn enum_wordnetsyn_match(
     mut enum_hypothesis_list: Vec<EnumeratedWord>,
     mut enum_reference_list: Vec<EnumeratedWord>,
-    mut synsets: &mut Synsets,
+    synsets: &Synsets,
 ) -> (Vec<MatchedTuple>, Vec<EnumeratedWord>, Vec<EnumeratedWord>) {
     let mut word_match = vec![];
 
     let mut i = enum_hypothesis_list.len() as isize - 1;
     while i >= 0 {
         // Placeholder for synonym generation
-        let hypothesis_syns: HashSet<String> = synsets.get(&enum_hypothesis_list[i as usize].1);
+        let hypothesis_syns: Vec<String> = synsets.get(&enum_hypothesis_list[i as usize].1);
 
         let mut j = enum_reference_list.len() as isize - 1;
         while j >= 0 {
@@ -124,22 +125,19 @@ fn enum_wordnetsyn_match(
 fn enum_align_words(
     enum_hypothesis_list: Vec<EnumeratedWord>,
     enum_reference_list: Vec<EnumeratedWord>,
-    synsets: &mut Synsets,
+    synsets: &Synsets,
+    stemmer: &Stemmer,
 ) -> (Vec<MatchedTuple>, Vec<UnmatchedTuple>, Vec<UnmatchedTuple>) {
-    let (exact_matches, mut enum_hypothesis, mut enum_reference) =
-        match_enums(enum_hypothesis_list.clone(), enum_reference_list.clone());
+    let (exact_matches, enum_hypothesis, enum_reference) =
+        match_enums(enum_hypothesis_list, enum_reference_list);
 
     let (stem_matches, more_hypothesis, more_ref) =
-        enum_stem_match(enum_hypothesis, enum_reference);
-    enum_hypothesis = more_hypothesis;
-    enum_reference = more_ref;
+        enum_stem_match(enum_hypothesis, enum_reference, stemmer);
 
     let (wns_matches, remaining_hypothesis, remaining_ref) =
-        enum_wordnetsyn_match(enum_hypothesis, enum_reference, synsets);
+        enum_wordnetsyn_match(more_hypothesis, more_ref, synsets);
 
-    let mut all_matches = exact_matches;
-    all_matches.extend(stem_matches);
-    all_matches.extend(wns_matches);
+    let mut all_matches = vec![exact_matches, stem_matches, wns_matches].concat();
     all_matches.sort_by_key(|(i, _)| *i);
 
     (all_matches, remaining_hypothesis, remaining_ref)
@@ -169,13 +167,14 @@ pub fn meteor_score(
     alpha: f64,
     beta: f64,
     gamma: f64,
-    synsets: &mut Synsets,
+    synsets: &Synsets,
+    stemmer: &Stemmer,
 ) -> f64 {
     let (enum_hypothesis, enum_reference) = generate_enums(hypothesis, reference);
     let translation_length = enum_hypothesis.len();
     let reference_length = enum_reference.len();
 
-    let (matches, _, _) = enum_align_words(enum_hypothesis, enum_reference, synsets);
+    let (matches, _, _) = enum_align_words(enum_hypothesis, enum_reference, synsets, stemmer);
     let matches_count = matches.len();
 
     if matches_count == 0 {
@@ -192,4 +191,33 @@ pub fn meteor_score(
     let penalty = gamma * frag_frac.powf(beta);
 
     (1.0 - penalty) * fmean
+}
+
+/* ########################################################################################## */
+
+pub fn init_cache(
+    hypothesis: &Vec<&str>,
+    synsets: &mut Synsets,
+    stemmer: &mut Stemmer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let reference = vec![""];
+    let (enum_hypothesis, _) = generate_enums(hypothesis, &reference);
+
+    init_enum_align_words(enum_hypothesis, synsets, stemmer);
+    Ok(())
+}
+
+fn init_enum_align_words(
+    enum_hypothesis_list: Vec<EnumeratedWord>,
+    synsets: &mut Synsets,
+    stemmer: &mut Stemmer,
+) {
+    let h: Vec<EnumeratedWord> = enum_hypothesis_list
+        .into_iter()
+        .map(|(i, word)| (i, stemmer.get_or_compute(&word)))
+        .collect();
+
+    h.iter().for_each(|(_, val)| {
+        synsets.get_or_compute(val);
+    });
 }

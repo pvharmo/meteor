@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet};
-use std::io::{Read, Write};
-use std::iter::FromIterator;
-use std::net::TcpStream;
+use pyo3::ffi::c_str;
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyString};
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 pub struct Stemmer {
-    store: RwLock<HashMap<String, HashSet<String>>>,
+    store: RwLock<HashMap<String, String>>,
 }
 
 impl Stemmer {
@@ -15,8 +15,11 @@ impl Stemmer {
         }
     }
 
-    pub fn get(&mut self, key: &str) -> HashSet<String> {
-        // First try a read-only lookup
+    pub fn get(&self, key: &str) -> String {
+        self.store.read().unwrap().get(key).unwrap().clone()
+    }
+
+    pub fn get_or_compute(&mut self, key: &str) -> String {
         if let Some(cached) = self.store.read().unwrap().get(key) {
             return cached.clone();
         }
@@ -31,19 +34,31 @@ impl Stemmer {
         result
     }
 
-    fn compute(&self, word: &str) -> HashSet<String> {
-        let mut stream = TcpStream::connect("127.0.0.1:8000").unwrap();
-        let request = format!(
-            "GET /stemmer/{} HTTP/1.1\r\n\
-                           Host: example.com\r\n\
-                           Connection: close\r\n\
-                           \r\n",
-            word
-        );
-        stream.write_all(request.as_bytes()).unwrap();
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).unwrap();
-        let syns = HashSet::from_iter(vec![word.to_string()]);
-        syns
+    fn compute(&self, word: &str) -> String {
+        let mut s = String::new();
+        Python::with_gil(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("word", word).unwrap();
+            py.run(
+                c_str!(
+                    r#"
+from nltk.stem import PorterStemmer
+stemmer = PorterStemmer()
+ret = stemmer.stem(word)
+                "#
+                ),
+                None,
+                Some(&locals),
+            )
+            .unwrap();
+
+            let ret = locals.get_item("ret").unwrap().unwrap();
+            s = ret
+                .downcast::<PyString>()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+        });
+        return s;
     }
 }

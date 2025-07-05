@@ -4,10 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dotenv = "0.15.0"
 indicatif = "0.17.11"
-polars = { version = "0.49.1", features = ["lazy", "json"] }
-serde = "1.0.219"
+rayon = "1.10.0"
+serde = { version = "1.0.219", features = ["derive"] }
 serde-jsonlines = "0.7.0"
 
-[dependencies.stem]
-git = "https://github.com/minhnhdo/rust-stem"
+[profile.release]
+lto = true
+opt-level = 3     # Maximum speed
+codegen-units = 1 # Slower compile, faster code
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[dependencies.pyo3]
+version = "0.25.1"
+features = ["auto-initialize"]
