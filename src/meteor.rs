@@ -53,21 +53,29 @@ fn match_enums(
 }
 
 fn enum_stem_match(
-    enum_hypothesis_list: Vec<EnumeratedWord>,
-    enum_reference_list: Vec<EnumeratedWord>,
+    mut enum_hypothesis_list: Vec<EnumeratedWord>,
+    mut enum_reference_list: Vec<EnumeratedWord>,
     stemmer: &Stemmer,
 ) -> (Vec<MatchedTuple>, Vec<UnmatchedTuple>, Vec<UnmatchedTuple>) {
-    let stemmed_enum_hypothesis = enum_hypothesis_list
-        .into_iter()
-        .map(|(i, word)| (i, stemmer.get(&word)))
-        .collect::<Vec<_>>();
+    // let stemmed_enum_hypothesis = enum_hypothesis_list
+    //     .into_iter()
+    //     .map(|(i, word)| (i, stemmer.get(&word)))
+    //     .collect::<Vec<_>>();
 
-    let stemmed_enum_reference = enum_reference_list
-        .into_iter()
-        .map(|(i, word)| (i, stemmer.get(&word)))
-        .collect::<Vec<_>>();
+    // let stemmed_enum_reference = enum_reference_list
+    //     .into_iter()
+    //     .map(|(i, word)| (i, stemmer.get(&word)))
+    //     .collect::<Vec<_>>();
 
-    match_enums(stemmed_enum_hypothesis, stemmed_enum_reference)
+    for (_, word) in enum_hypothesis_list.iter_mut() {
+        *word = stemmer.get(&word);
+    }
+
+    for (_, word) in enum_reference_list.iter_mut() {
+        *word = stemmer.get(&word);
+    }
+
+    match_enums(enum_hypothesis_list, enum_reference_list)
 }
 
 // fn f_hypothesis_syns(word: &str, cache: &mut Cache) -> HashSet<String> {

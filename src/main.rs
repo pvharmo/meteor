@@ -1,9 +1,10 @@
 mod meteor;
 mod stemmer;
 mod synsets;
-use dotenv::dotenv;
 use indicatif::ProgressIterator;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use itertools::Itertools;
+use std::cmp::min;
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -26,47 +27,59 @@ pub struct Stats {
 
 #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Document {
-    pub repository_id: u32,
+    pub id: u32,
     pub content: String,
     pub info: Info,
 }
 
 fn main() -> Result<()> {
-    dotenv().ok();
+    let args: Vec<String> = std::env::args().collect();
+
     let mut synsets = Synsets::new();
     let mut stemmer = stemmer::Stemmer::new();
 
-    let dataset = json_lines(std::env::var("DATASET_PATH").expect("DATASET_PATH must be set."))?
-        .collect::<Result<Vec<Document>>>()?;
+    let dataset = json_lines(&args[1])
+        .expect("You must provide a valid path to a JSON Lines file as first argument")
+        .collect::<Result<Vec<Document>>>()
+        .expect("Invalid JSON Lines file provided");
     println!("Loaded dataset with {} rows", dataset.len());
 
-    let mut categorized: Vec<Vec<(u64, Vec<&str>)>> = vec![vec![], vec![], vec![], vec![]];
+    let mut categorized: Vec<Vec<(u64, Vec<&str>)>> = vec![vec![]; 100];
 
     for doc in dataset.iter().progress() {
-        let num_of_jobs = doc.info.stats.NumOfJobs;
-        let num_of_steps = doc.info.stats.TotalNumOfSteps;
+        let num_of_jobs = min(doc.info.stats.NumOfJobs, 10) as i64 - 1;
+        let num_of_steps = min(doc.info.stats.TotalNumOfSteps, 10) as i64 - 1;
         let content = doc.content.split_whitespace().collect();
+
         meteor::init_cache(&content, &mut synsets, &mut stemmer).unwrap();
-        if num_of_jobs > 1 {
-            categorized[0].push((doc.repository_id as u64, content));
-        } else if num_of_steps > 5 {
-            categorized[1].push((doc.repository_id as u64, content));
-        } else if num_of_steps > 3 {
-            categorized[2].push((doc.repository_id as u64, content));
-        } else {
-            categorized[3].push((doc.repository_id as u64, content));
+
+        if num_of_steps >= 0 && num_of_jobs >= 0 {
+            categorized[(num_of_jobs * 10 + num_of_steps) as usize].push((doc.id as u64, content))
         }
     }
 
-    println!(
-        "category splits: {}, {}, {}, {}",
-        categorized[0].len(),
-        categorized[1].len(),
-        categorized[2].len(),
-        categorized[3].len()
-    );
+    println!("Categories counts: ");
+    for (i, category) in categorized.iter().enumerate() {
+        if i % 10 == 0 && i != 0 {
+            println!();
+        }
+        print!("{}, ", category.len());
+    }
+    println!();
 
-    for (dataset_index, preprocessed_dataset) in categorized.iter().enumerate() {
+    calculate_score(&categorized, &synsets, &stemmer).unwrap();
+
+    filter_dataset(categorized, &args[2]).unwrap();
+
+    Ok(())
+}
+
+fn calculate_score(
+    categorized_dataset: &Vec<Vec<(u64, Vec<&str>)>>,
+    synsets: &Synsets,
+    stemmer: &stemmer::Stemmer,
+) -> Result<()> {
+    for (dataset_index, preprocessed_dataset) in categorized_dataset.iter().enumerate() {
         let preprocessed_dataset_2 = preprocessed_dataset.clone();
         let count = preprocessed_dataset.len();
 
@@ -86,6 +99,7 @@ fn main() -> Result<()> {
         println!("Preprocessing done, starting scoring {} elements", count);
         let score_matrix: Vec<Vec<u8>> = preprocessed_dataset
             .into_par_iter()
+            // .iter()
             .enumerate()
             .map(|(i, a)| {
                 let mut score_vector = vec![0 as u8; count];
@@ -108,5 +122,32 @@ fn main() -> Result<()> {
         .unwrap();
     }
 
+    Ok(())
+}
+
+fn filter_dataset(
+    categorized_dataset: Vec<Vec<(u64, Vec<&str>)>>,
+    file_path: &String,
+) -> Result<()> {
+    let mut indices_to_remove: Vec<u64> = Vec::with_capacity(10000);
+    for (dataset_index, preprocessed_dataset) in categorized_dataset.iter().enumerate() {
+        let meteor_scores = std::fs::read(format!("score_matrix-{}.bin", dataset_index)).unwrap();
+        // for scores_chunks in &meteor_scores.iter().chunks(preprocessed_dataset.len()) {
+        for (j, score) in meteor_scores.iter().enumerate() {
+            // for (j, score) in scores_chunks.enumerate() {
+            if *score > 95 {
+                indices_to_remove.push(preprocessed_dataset[j % preprocessed_dataset.len()].0)
+            }
+            // }
+        }
+    }
+
+    let indices_to_remove_string = indices_to_remove
+        .iter()
+        .unique()
+        .map(|score| score.to_string())
+        .join("\n");
+
+    std::fs::write(file_path, format!("id\n{}", indices_to_remove_string)).unwrap();
     Ok(())
 }

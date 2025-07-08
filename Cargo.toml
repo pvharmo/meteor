@@ -9,6 +9,7 @@ indicatif = "0.17.11"
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-jsonlines = "0.7.0"
+itertools = "0.14.0"
 
 [profile.release]
 lto = true
